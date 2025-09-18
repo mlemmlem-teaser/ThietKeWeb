@@ -38,7 +38,7 @@ function extractArray(resp) {
   return [];
 }
 
-// OOP: Car & Inventory
+// Car & Inventory
 class Car {
   constructor({ id, make_id, make_name, name, body, engine }) {
     body = body || {};
@@ -49,15 +49,15 @@ class Car {
     this.make_name = make_name ?? null;
     this.name = name ?? null;
 
-    // body (null-safe)
+    // body 
     this.bodyType = body.type ?? body.bodyType ?? body.value ?? null;
     this.doors = body.doors ?? null;
 
-    // engine (null-safe)
+    // engine 
     this.engineType = engine.engine ?? engine.engine_type ?? engine.type ?? engine.name ?? null;
     this.horsepower = engine.horsepower ?? engine.horsepower_hp ?? engine.hp ?? null;
 
-    this.image = 'default_car_image.png';
+    this.image = 'Assets/image/car0.png';
     this.stock = 100;
     this.sold = 0;
   }
@@ -193,7 +193,7 @@ async function buildInventoryFromApi() {
 
   // example operations
   inventory.updateAllImages('assets/default.png');
-  if (inventory.cars[0]) inventory.updateCarImage(inventory.cars[0].id, 'assets/car0.png');
+  if (inventory.cars[0]) inventory.updateCarImage(inventory.cars[0].id, 'Assets/image/car0.png');
   if (inventory.cars[0]) inventory.sellCar(inventory.cars[0].id, 5);
 
 
