@@ -1,59 +1,224 @@
-const url_makes = 'https://car-api2.p.rapidapi.com/api/makes';
-const url_mileages = 'https://car-api2.p.rapidapi.com/api/mileages';
-const url_engines = 'https://car-api2.p.rapidapi.com/api/engines';
+// Configuration
+const RAPIDAPI_KEY = '02e21a2917mshb9f7023387f37a0p16f9b8jsnf44ab3717559'; 
 
-const options = {
-  method: 'GET',
-  headers: {
-    'x-rapidapi-key': '02e21a2917mshb9f7023387f37a0p16f9b8jsnf44ab3717559',
-    'x-rapidapi-host': 'car-api2.p.rapidapi.com'
-  }
+const URL_MODELS = 'https://car-api2.p.rapidapi.com/api/models?sort=id&direction=asc&year=2020&verbose=yes';
+const URL_BODIES = 'https://car-api2.p.rapidapi.com/api/bodies?verbose=yes&sort=id&direction=asc';
+const URL_ENGINES = 'https://car-api2.p.rapidapi.com/api/engines?verbose=yes&direction=asc&sort=id';
+
+const RAPIDAPI_HEADERS = {
+  'x-rapidapi-key': RAPIDAPI_KEY,
+  'x-rapidapi-host': 'car-api2.p.rapidapi.com'
 };
 
-// Hàm lấy dữ liệu từ 1 endpoint
-const fetchData = async (url) => {
-  const res = await fetch(url, options);
-  return res.json();
-};
+const $log = document.getElementById('log');
+function log(...args) {
+  console.log(...args);
+  $log.textContent += args.map(a => (typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a))).join(' ') + '\n';
+}
+function clearLog(){ $log.textContent = ''; }
 
-const getCarsData = async () => {
+// Helpers: fetch & extract
+async function fetchJson(url) {
+  const resp = await fetch(url, { method: 'GET', headers: RAPIDAPI_HEADERS });
+  const text = await resp.text();
   try {
-    // Gọi tất cả endpoint cùng lúc
-    const [makesData, mileagesData, enginesData] = await Promise.all([
-      fetchData(url_makes),
-      fetchData(url_mileages),
-      fetchData(url_engines)
-    ]);
+    return JSON.parse(text);
+  } catch (e) {
+    return text;
+  }
+}
 
-    // Ví dụ: lấy danh sách từ key "data" (tùy API trả về)
-    const makes = makesData.data || [];
-    const mileages = mileagesData.data || [];
-    const engines = enginesData.data || [];
+function extractArray(resp) {
+  if (!resp) return [];
+  if (Array.isArray(resp)) return resp;
+  if (resp.data && Array.isArray(resp.data)) return resp.data;
+  if (resp.collection && resp.collection.data && Array.isArray(resp.collection.data)) return resp.collection.data;
+  if (resp.results && Array.isArray(resp.results)) return resp.results;
+  if (resp.items && Array.isArray(resp.items)) return resp.items;
+  return [];
+}
 
-    // Gộp dữ liệu
-    const mergedCars = makes.map(make => {
-      const mileage = mileages.find(m => m.make_id === make.id) || {};
-      const engine = engines.find(e => e.make_id === make.id) || {};
+// OOP: Car & Inventory
+class Car {
+  constructor({ id, make_id, make_name, name, body, engine }) {
+    body = body || {};
+    engine = engine || {};
 
-      return {
-        id: make.id,
-        name: make.name,             // từ makes
-        country: make.country || "", // từ makes
-        mileage: mileage.value || "",// từ mileages
-        engine: {
-          type: engine.type || "",
-          fuel: engine.fuel_type || "",
-          horsepower: engine.hp || ""
-        }
-      };
+    this.id = id;
+    this.make_id = make_id ?? null;
+    this.make_name = make_name ?? null;
+    this.name = name ?? null;
+
+    // body (null-safe)
+    this.bodyType = body.type ?? body.bodyType ?? body.value ?? null;
+    this.doors = body.doors ?? null;
+
+    // engine (null-safe)
+    this.engineType = engine.engine ?? engine.engine_type ?? engine.type ?? engine.name ?? null;
+    this.horsepower = engine.horsepower ?? engine.horsepower_hp ?? engine.hp ?? null;
+
+    this.image = 'default_car_image.png';
+    this.stock = 100;
+    this.sold = 0;
+  }
+
+  get in_stock() { return this.stock - this.sold; }
+  changeImage(p) { this.image = p; }
+  sell(qty) {
+    qty = Number(qty) || 0;
+    if (qty <= 0) return false;
+    if (this.sold + qty > this.stock) return false;
+    this.sold += qty;
+    return true;
+  }
+}
+
+class Inventory {
+  constructor(cars = []) {
+    this.cars = cars; // array of Car
+  }
+
+  static fromNormalized(models, bodies, engines) {
+
+    const cars = models.map(m => {
+      const id = m.id;
+      // match by model_id
+      let body = bodies.find(b => b.model_id === id) || null;
+      let engine = engines.find(e => e.model_id === id) || null;
+
+      // fallback: try to find in model.__raw fields
+      if (!body) {
+        const raw = m.__raw;
+        let cand = raw?.make_model_trim?.make_model || raw?.make_model || raw?.bodies || raw?.body || raw?.attributes?.body;
+        if (Array.isArray(cand)) cand = cand[0];
+        if (typeof cand === 'string') cand = { type: cand };
+        if (cand) body = { type: cand.type ?? cand.bodyType ?? cand.value ?? null, doors: cand.doors ?? null, __raw: cand };
+      }
+      if (!engine) {
+        const raw = m.__raw;
+        let cand = raw?.make_model_trim?.make_model || raw?.make_model || raw?.engines || raw?.engine || raw?.attributes?.engine;
+        if (Array.isArray(cand)) cand = cand[0];
+        if (typeof cand === 'string') cand = { engine: cand };
+        if (cand) engine = { engine: cand.engine ?? cand.engine_type ?? cand.name ?? null, horsepower: cand.horsepower ?? cand.horsepower_hp ?? null, __raw: cand };
+      }
+
+      return new Car({
+        id: m.id,
+        make_id: m.make_id,
+        make_name: m.make_name,
+        name: m.name,
+        body,
+        engine
+      });
     });
 
-    console.log(mergedCars);
-    return mergedCars;
-
-  } catch (error) {
-    console.error("Lỗi khi fetch dữ liệu:", error);
+    return new Inventory(cars);
   }
-};
 
-getCarsData();
+  updateAllImages(path) { this.cars.forEach(c => c.changeImage(path)); }
+  updateCarImage(id, path) { const c = this.cars.find(x => x.id === id); if (c) c.changeImage(path); }
+  sellCar(id, qty) { const c = this.cars.find(x => x.id === id); if (!c) return { ok:false }; return { ok: c.sell(qty), car:c }; }
+
+  generateReportObject() {
+    return this.cars.map(c => ({ id: c.id, make_id: c.make_id, name: c.name, sold: c.sold, in_stock: c.in_stock }));
+  }
+
+  exportReportBrowser(filename='car_report.json') {
+    const report = this.generateReportObject();
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+    log('Report downloaded (browser):', filename);
+  }
+}
+
+// Build inventory: fetch + normalize + match
+async function buildInventoryFromApi() {
+  clearLog();
+  log('Fetching endpoints... (this may take a few seconds)');
+
+  // fetch all
+  const [rawModels, rawBodies, rawEngines] = await Promise.all([
+    fetchJson(URL_MODELS),
+    fetchJson(URL_BODIES),
+    fetchJson(URL_ENGINES)
+  ]);
+
+  log('RAW MODELS sample:', rawModels?.collection?.url ? 'collection' : typeof rawModels);
+  log('RAW BODIES sample:', rawBodies?.collection?.url ? 'collection' : typeof rawBodies);
+  log('RAW ENGINES sample:', rawEngines?.collection?.url ? 'collection' : typeof rawEngines);
+
+  // extract arrays
+  const modelsArr = extractArray(rawModels);
+  const bodiesArr = extractArray(rawBodies);
+  const enginesArr = extractArray(rawEngines);
+
+  // normalize models
+  const models = modelsArr.map(item => {
+    const make_id = item.make_id ?? (item.make && item.make.id) ?? null;
+    const make_name = item.make && item.make.name ? item.make.name : (item.make_name ?? null);
+    return { id: item.id, make_id, make_name, name: item.name ?? item.model_name ?? item.title ?? null, __raw: item };
+  });
+
+  // normalize bodies: locate model_id inside make_model_trim.make_model.id (fallback)
+  const bodies = bodiesArr.map(item => {
+    const model_id = item?.make_model_trim?.make_model?.id ?? item?.make_model_trim?.make_model_id ?? item?.make_model_id ?? null;
+    return {
+      id: item.id ?? null,
+      model_id,
+      type: item.type ?? item.value ?? item.name ?? null,
+      doors: item.doors ?? null,
+      __raw: item
+    };
+  });
+
+  // normalize engines: locate model_id inside make_model_trim.make_model.id (fallback)
+  const engines = enginesArr.map(item => {
+    const model_id = item?.make_model_trim?.make_model?.id ?? item?.make_model_trim?.make_model_id ?? item?.make_model_id ?? null;
+    return {
+      id: item.id ?? null,
+      model_id,
+      engine: item.engine ?? item.engine_type ?? item.name ?? item.value ?? null,
+      horsepower: item.horsepower ?? item.horsepower_hp ?? item.hp ?? null,
+      __raw: item
+    };
+  });
+
+  log(`Fetched sizes -> models: ${models.length}, bodies: ${bodies.length}, engines: ${engines.length}`);
+
+  // build inventory matching model.id === body.model_id / engine.model_id
+  const inventory = Inventory.fromNormalized(models, bodies, engines);
+
+  // example operations
+  inventory.updateAllImages('assets/default.png');
+  if (inventory.cars[0]) inventory.updateCarImage(inventory.cars[0].id, 'assets/car0.png');
+  if (inventory.cars[0]) inventory.sellCar(inventory.cars[0].id, 5);
+
+
+  // enable download button
+  document.getElementById('downloadBtn').disabled = false;
+  // log some sample cars
+  log('Inventory ready. Count:', inventory.cars.length);
+  log('Sample:', inventory.cars.slice(0,99).map(c => ({ id:c.id, name:c.name, make:c.make_name, body:c.bodyType, engine:c.engineType, hp:c.horsepower })));
+
+  return { inventory, models, bodies, engines };
+}
+
+// UI wiring
+let latestInventory = null;
+document.getElementById('fetchBtn').addEventListener('click', async () => {
+  try {
+    const { inventory } = await buildInventoryFromApi();
+    latestInventory = inventory;
+  } catch (e) {
+    log('Error building inventory:', e);
+  }
+});
+
+document.getElementById('downloadBtn').addEventListener('click', () => {
+  if (!latestInventory) return alert('No inventory yet. Press Fetch first.');
+  latestInventory.exportReportBrowser('car_report.json');
+});
+
